@@ -38,7 +38,8 @@ pub async fn fetch_hf_trending_with_base(
     limit: u32,
     library_filter: Option<&str>,
 ) -> WatcherResult<Vec<TrendingModelMeta>> {
-    let mut url = format!("{base}?sort=trending&limit={limit}");
+    // HF API sort 값: trendingScore (또는 downloads / lastModified). `trending`은 deprecated.
+    let mut url = format!("{base}?sort=trendingScore&limit={limit}");
     if let Some(lib) = library_filter {
         url.push_str("&library=");
         url.push_str(lib);
@@ -192,7 +193,7 @@ mod tests {
         let server = MockServer::start().await;
         Mock::given(method("GET"))
             .and(path("/api/models"))
-            .and(query_param("sort", "trending"))
+            .and(query_param("sort", "trendingScore"))
             .and(query_param("limit", "50"))
             .and(query_param("library", "gguf"))
             .respond_with(ResponseTemplate::new(200).set_body_string("[]"))
