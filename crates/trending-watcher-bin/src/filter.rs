@@ -255,7 +255,7 @@ pub fn korean_signal_combined(model: &TrendingModelMeta, card_text: Option<&str>
 /// 정책:
 /// - leaderboard.eval_name이 trending.id와 1:1 매칭이라 가정 (HF model id 표준 형식).
 /// - leaderboard 없는 trending은 open_llm component 0.0.
-/// - card_text는 본 함수에서 제공 X — score_candidate_with_card 호출자가 별도 인덱스 주입(.c.3).
+/// - card_text는 본 함수에서 제공 X — `join_candidates_with_cards`로 호출.
 pub fn join_candidates(
     trending: &[TrendingModelMeta],
     leaderboard: &[LeaderboardEntry],
@@ -270,6 +270,31 @@ pub fn join_candidates(
         .map(|m| {
             let lb = lb_index.get(m.id.as_str()).copied();
             score_candidate(m, lb)
+        })
+        .collect()
+}
+
+/// trending + leaderboard + model card 본문 인덱스를 join — Phase 21'.c.3.
+///
+/// 정책:
+/// - cards: `id` → README 본문 (또는 카드 미존재 시 entry 누락 — graceful).
+/// - cards에 없으면 score_candidate_with_card에 None 전달 (tag만 사용).
+pub fn join_candidates_with_cards(
+    trending: &[TrendingModelMeta],
+    leaderboard: &[LeaderboardEntry],
+    cards: &std::collections::HashMap<String, String>,
+) -> Vec<Candidate> {
+    use std::collections::HashMap;
+    let lb_index: HashMap<&str, &LeaderboardEntry> = leaderboard
+        .iter()
+        .map(|e| (e.eval_name.as_str(), e))
+        .collect();
+    trending
+        .iter()
+        .map(|m| {
+            let lb = lb_index.get(m.id.as_str()).copied();
+            let card = cards.get(&m.id).map(String::as_str);
+            score_candidate_with_card(m, lb, card)
         })
         .collect()
 }
@@ -560,5 +585,31 @@ mod tests {
         let cand = score_candidate_with_card(&model, None, Some(card));
         // 1 hit × 0.3 = 0.3.
         assert!((cand.components.korean - 0.3).abs() < f64::EPSILON);
+    }
+
+    /// **invariant 20** — join_with_cards: cards 인덱스에 있는 모델만 정규식 적용.
+    #[test]
+    fn join_with_cards_indexes_text_korean() {
+        use std::collections::HashMap;
+        let trending = vec![
+            make_model("alpha/beta-7B", 1000, vec!["license:apache-2.0"], None),
+            make_model("gamma/delta-7B", 500, vec!["license:mit"], None),
+        ];
+        let leaderboard = Vec::<LeaderboardEntry>::new();
+        let mut cards = HashMap::new();
+        cards.insert(
+            "alpha/beta-7B".to_string(),
+            "이 모델은 한국어 학습 데이터로 fine-tune됐어요.".to_string(),
+        );
+        // gamma/delta-7B는 cards 누락 — graceful.
+
+        let cands = join_candidates_with_cards(&trending, &leaderboard, &cards);
+        assert_eq!(cands.len(), 2);
+        let alpha = cands.iter().find(|c| c.id == "alpha/beta-7B").unwrap();
+        // 1 hit × 0.3 = 0.3.
+        assert!((alpha.components.korean - 0.3).abs() < f64::EPSILON);
+        let gamma = cands.iter().find(|c| c.id == "gamma/delta-7B").unwrap();
+        // cards 누락 + tag 없음 → 0.0.
+        assert_eq!(gamma.components.korean, 0.0);
     }
 }

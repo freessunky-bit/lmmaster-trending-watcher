@@ -5,7 +5,9 @@
 //! - `github.com` / `raw.githubusercontent.com` — Arena 미러, Ollama library.
 
 pub mod hf_trending;
+pub mod model_card;
 pub mod open_llm;
 
 pub use hf_trending::fetch_hf_trending;
 pub use open_llm::fetch_leaderboard;
+// model_card::fetch_model_card는 21'.c.4에서 main wire 시 re-export.
