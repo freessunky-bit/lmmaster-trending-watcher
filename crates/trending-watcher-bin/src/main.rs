@@ -9,6 +9,7 @@
 
 mod error;
 mod fetcher;
+mod filter;
 mod types;
 
 use anyhow::Result;
