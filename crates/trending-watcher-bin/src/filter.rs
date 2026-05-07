@@ -112,7 +112,9 @@ pub fn open_llm_score(avg: Option<f64>) -> f64 {
     avg.map(|a| (a / 100.0).clamp(0.0, 1.0)).unwrap_or(0.0)
 }
 
-/// Korean signal — Phase 21'.c.1은 *tags["ko"]만 검사*. 정규식 hit는 .c.2 후속.
+/// Korean signal — `tags["ko"]만 검사`. card_text 통합은 `korean_signal_combined`.
+///
+/// 본 함수는 fast path. 풀 통합은 score_candidate_with_card → korean_signal_combined.
 pub fn korean_signal(model: &TrendingModelMeta) -> f64 {
     if model.has_korean_tag() {
         1.0
@@ -167,20 +169,32 @@ pub fn size_gate(size_b: Option<f64>) -> Queue {
     }
 }
 
-/// Trending model + Optional Leaderboard entry → Candidate.
+/// Trending model + Optional Leaderboard entry → Candidate. *card_text 없는 fast path*.
+///
+/// 본 wrapper는 `score_candidate_with_card(model, leaderboard, None)`와 동일.
+pub fn score_candidate(
+    model: &TrendingModelMeta,
+    leaderboard: Option<&LeaderboardEntry>,
+) -> Candidate {
+    score_candidate_with_card(model, leaderboard, None)
+}
+
+/// Trending model + Optional Leaderboard + Optional model card text → Candidate.
 ///
 /// 정책:
 /// - license_score 0.0이면 즉시 `Excluded` (큐 진입 X).
 /// - 사이즈 게이트로 `Review` / `InfoOnly` 분기.
 /// - score는 components 가중합 (LLM judge 0).
-pub fn score_candidate(
+/// - card_text 주어지면 Korean signal에 정규식 hit count 0.3·count cap 1.0 결합.
+pub fn score_candidate_with_card(
     model: &TrendingModelMeta,
     leaderboard: Option<&LeaderboardEntry>,
+    card_text: Option<&str>,
 ) -> Candidate {
     let lic_str = model.license().unwrap_or_default();
     let lic = license_score(&lic_str);
     let dl = downloads_score(model.downloads);
-    let kr = korean_signal(model);
+    let kr = korean_signal_combined(model, card_text);
     let gg = gguf_present_score(model);
     let ol = open_llm_score(leaderboard.map(|e| e.average));
 
@@ -207,6 +221,57 @@ pub fn score_candidate(
         queue,
         components,
     }
+}
+
+/// Korean 정규식 — `(한국어|Korean|한글|EXAONE|HyperCLOVA|HCX)` hit count → 0.3·count cap 1.0.
+///
+/// 정책 (ADR-0059 §4):
+/// - 정규식 hit가 곧 *한국어 친화도 신호*. 본문 정규식 hit 0.3·count cap 1.0.
+/// - 빈 텍스트 / 영어만 → 0.0.
+pub fn korean_signal_from_text(text: &str) -> f64 {
+    use regex::Regex;
+    use std::sync::OnceLock;
+    static RE: OnceLock<Regex> = OnceLock::new();
+    let re = RE.get_or_init(|| {
+        Regex::new(r"(한국어|Korean|한글|EXAONE|HyperCLOVA|HCX)").expect("korean signal regex")
+    });
+    let hits = re.find_iter(text).count();
+    (hits as f64 * 0.3).clamp(0.0, 1.0)
+}
+
+/// 통합 Korean signal — `tags["ko"]` 1.0 (priority) OR card_text 정규식 hit.
+///
+/// `tags["ko"]`이 있으면 즉시 1.0 (HF cardData.language=ko 자동 매핑이라 신뢰도 높음).
+/// 없으면 card_text가 주어졌을 때 정규식 hit count 사용.
+pub fn korean_signal_combined(model: &TrendingModelMeta, card_text: Option<&str>) -> f64 {
+    if model.has_korean_tag() {
+        return 1.0;
+    }
+    card_text.map(korean_signal_from_text).unwrap_or(0.0)
+}
+
+/// trending + leaderboard 두 fetch 결과를 join — `eval_name` ↔ `id` 매핑.
+///
+/// 정책:
+/// - leaderboard.eval_name이 trending.id와 1:1 매칭이라 가정 (HF model id 표준 형식).
+/// - leaderboard 없는 trending은 open_llm component 0.0.
+/// - card_text는 본 함수에서 제공 X — score_candidate_with_card 호출자가 별도 인덱스 주입(.c.3).
+pub fn join_candidates(
+    trending: &[TrendingModelMeta],
+    leaderboard: &[LeaderboardEntry],
+) -> Vec<Candidate> {
+    use std::collections::HashMap;
+    let lb_index: HashMap<&str, &LeaderboardEntry> = leaderboard
+        .iter()
+        .map(|e| (e.eval_name.as_str(), e))
+        .collect();
+    trending
+        .iter()
+        .map(|m| {
+            let lb = lb_index.get(m.id.as_str()).copied();
+            score_candidate(m, lb)
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -379,5 +444,121 @@ mod tests {
             Some("transformers"),
         );
         assert_eq!(gguf_present_score(&m4), 0.0);
+    }
+
+    // ────────────────────────────────────────────────────────────────────
+    // Phase 21'.c.2 — Korean regex + join invariant
+    // ────────────────────────────────────────────────────────────────────
+
+    /// **invariant 11** — 한국어 정규식 hit count: 2 hits → 0.6.
+    #[test]
+    fn korean_regex_hits_basic() {
+        let text = "이 모델은 한국어 데이터로 학습된 한국어 LLM이에요.";
+        // hits: "한국어" × 2 → 0.6.
+        let s = korean_signal_from_text(text);
+        assert!((s - 0.6).abs() < f64::EPSILON, "got {s}, expected 0.6");
+    }
+
+    /// **invariant 12** — 정규식 cap 1.0 (5+ hits → 1.0).
+    #[test]
+    fn korean_regex_caps_at_one() {
+        let text = "한국어 한국어 한국어 한국어 한국어 한국어 한국어";
+        // 7 hits × 0.3 = 2.1, capped to 1.0.
+        let s = korean_signal_from_text(text);
+        assert_eq!(s, 1.0);
+    }
+
+    /// **invariant 13** — 영어/빈 텍스트 → 0.0.
+    #[test]
+    fn korean_regex_zero_hits() {
+        assert_eq!(korean_signal_from_text(""), 0.0);
+        assert_eq!(korean_signal_from_text("English only model"), 0.0);
+    }
+
+    /// **invariant 14** — 정규식: 다양한 키워드 모두 인식 (Korean / 한글 / EXAONE / HyperCLOVA / HCX).
+    #[test]
+    fn korean_regex_all_keywords() {
+        // 6 키워드 각 1 hit × 0.3 = 1.8, capped to 1.0.
+        let text = "한국어 Korean 한글 EXAONE HyperCLOVA HCX";
+        let s = korean_signal_from_text(text);
+        assert_eq!(s, 1.0);
+    }
+
+    /// **invariant 15** — combined: tags["ko"] priority — text 무시하고 1.0.
+    #[test]
+    fn korean_combined_tag_priority() {
+        let m_ko_with_text = make_model("x/y-7B", 0, vec!["ko"], None);
+        // 텍스트는 영어만 — 그래도 tag로 인해 1.0.
+        let s = korean_signal_combined(&m_ko_with_text, Some("English only"));
+        assert_eq!(s, 1.0);
+    }
+
+    /// **invariant 16** — combined: tag 없으면 text 기반.
+    #[test]
+    fn korean_combined_text_fallback() {
+        let m_no_tag = make_model("x/y-7B", 0, vec![], None);
+        let s = korean_signal_combined(&m_no_tag, Some("이 모델은 한국어 학습"));
+        // 1 hit × 0.3 = 0.3.
+        assert!((s - 0.3).abs() < f64::EPSILON);
+
+        // text 미주입 → 0.0.
+        assert_eq!(korean_signal_combined(&m_no_tag, None), 0.0);
+    }
+
+    /// **invariant 17** — join: trending에 있고 leaderboard에 없는 모델은 open_llm 0.
+    #[test]
+    fn join_handles_missing_leaderboard() {
+        let trending = vec![
+            make_model("Qwen/Qwen2.5-7B", 1000, vec!["license:apache-2.0"], None),
+            make_model(
+                "elyza/Llama-3-ELYZA-JP-8B",
+                500,
+                vec!["license:llama3"],
+                None,
+            ),
+        ];
+        let leaderboard = vec![LeaderboardEntry {
+            eval_name: "Qwen/Qwen2.5-7B".into(),
+            average: 75.0,
+            ifeval: None,
+            bbh: None,
+            math_lvl_5: None,
+            gpqa: None,
+            musr: None,
+            mmlu_pro: None,
+        }];
+        let cands = join_candidates(&trending, &leaderboard);
+        assert_eq!(cands.len(), 2);
+        // 첫 모델은 leaderboard hit → open_llm = 0.75.
+        let qwen = cands.iter().find(|c| c.id == "Qwen/Qwen2.5-7B").unwrap();
+        assert!((qwen.components.open_llm - 0.75).abs() < f64::EPSILON);
+        // 두 번째 모델은 leaderboard miss → open_llm = 0.0.
+        let elyza = cands
+            .iter()
+            .find(|c| c.id == "elyza/Llama-3-ELYZA-JP-8B")
+            .unwrap();
+        assert_eq!(elyza.components.open_llm, 0.0);
+    }
+
+    /// **invariant 18** — join: 빈 trending → 빈 결과.
+    #[test]
+    fn join_empty_trending_returns_empty() {
+        let cands = join_candidates(&[], &[]);
+        assert!(cands.is_empty());
+    }
+
+    /// **invariant 19** — score_candidate_with_card: text 기반 Korean signal 통합.
+    #[test]
+    fn score_with_card_uses_text_korean() {
+        let model = make_model(
+            "x/y-7B",
+            1000,
+            vec!["license:apache-2.0"], // tag["ko"] 없음
+            None,
+        );
+        let card = "이 모델은 한국어 추론에 강력해요.";
+        let cand = score_candidate_with_card(&model, None, Some(card));
+        // 1 hit × 0.3 = 0.3.
+        assert!((cand.components.korean - 0.3).abs() < f64::EPSILON);
     }
 }
