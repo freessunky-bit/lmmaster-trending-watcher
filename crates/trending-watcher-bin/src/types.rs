@@ -108,3 +108,28 @@ mod tests {
         assert!(!m.is_gguf());
     }
 }
+
+/// Open LLM Leaderboard 2 row — `Average` + `eval_name` 등 핵심 컬럼만 추출.
+///
+/// 정책:
+/// - Parquet schema가 변하면 *모르는 컬럼은 무시*. 핵심 컬럼이 비면 `None` (Average / eval_name 둘은 필수).
+/// - eval_name은 `<author>/<repo>` 형식 (HF model id와 join 가능).
+#[derive(Debug, Clone, PartialEq)]
+pub struct LeaderboardEntry {
+    /// `<author>/<repo>` (HF model id와 같은 형식).
+    pub eval_name: String,
+    /// 평균 점수 (0~100).
+    pub average: f64,
+    /// IFEval — instruction-following.
+    pub ifeval: Option<f64>,
+    /// BBH — Big-Bench Hard.
+    pub bbh: Option<f64>,
+    /// MATH Lvl 5.
+    pub math_lvl_5: Option<f64>,
+    /// GPQA.
+    pub gpqa: Option<f64>,
+    /// MUSR.
+    pub musr: Option<f64>,
+    /// MMLU-PRO.
+    pub mmlu_pro: Option<f64>,
+}

@@ -13,7 +13,7 @@ mod types;
 
 use anyhow::Result;
 
-use crate::fetcher::{fetch_hf_trending, hf_trending::make_client};
+use crate::fetcher::{fetch_hf_trending, fetch_leaderboard, hf_trending::make_client};
 
 const WATCHER_VERSION: &str = env!("CARGO_PKG_VERSION");
 const DEFAULT_LIMIT: u32 = 200;
@@ -50,6 +50,33 @@ async fn main() -> Result<()> {
         Err(e) => {
             tracing::error!(error = %e, "HF Trending fetch 실패");
             return Err(e.into());
+        }
+    }
+
+    // Open LLM Leaderboard 2 fetch — 21'.b.2 cut.
+    match fetch_leaderboard(&client).await {
+        Ok(entries) => {
+            tracing::info!(
+                count = entries.len(),
+                "Open LLM Leaderboard 2 (open-llm-leaderboard/contents) fetch 성공"
+            );
+            if entries.is_empty() {
+                tracing::warn!("Leaderboard 응답이 비었어요 — graceful skip");
+            }
+            if dry_run {
+                for e in entries.iter().take(5) {
+                    tracing::info!(
+                        eval_name = %e.eval_name,
+                        average = e.average,
+                        "leaderboard preview"
+                    );
+                }
+            }
+        }
+        Err(e) => {
+            // Leaderboard fetch 실패가 watcher 전체를 깨뜨리지는 않음 — HF API 장애 여전히
+            // gracefully degrade하고 trending만으로 진행 가능하게 warning만 emit.
+            tracing::warn!(error = %e, "Leaderboard fetch 실패 — trending only 진행");
         }
     }
 

@@ -5,5 +5,7 @@
 //! - `github.com` / `raw.githubusercontent.com` — Arena 미러, Ollama library.
 
 pub mod hf_trending;
+pub mod open_llm;
 
 pub use hf_trending::fetch_hf_trending;
+pub use open_llm::fetch_leaderboard;

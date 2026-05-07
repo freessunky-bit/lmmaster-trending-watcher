@@ -24,6 +24,8 @@ arrow-array = "53"
 arrow-schema = "53"
 regex = "1"
 
+bytes = "1"
+
 # dev — HTTP mocking.
 wiremock = "0.6"
 
