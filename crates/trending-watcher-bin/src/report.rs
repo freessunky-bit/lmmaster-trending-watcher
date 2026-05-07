@@ -46,7 +46,9 @@ pub fn generate_report(candidates: &[Candidate], top_n: usize) -> String {
         "> 자동 발견된 후보예요. 큐레이터가 검토 후 LMmaster 본 repo에 manifest PR을 올려 주세요.\n",
     );
     s.push_str("> 검토 체크리스트는 [CURATION_GUIDE.md](../CURATION_GUIDE.md) 참고.\n\n");
-    s.push_str("생성: {{ env.GENERATED_AT | default: \"(GHA env 누락)\" }}\n\n");
+    // JasonEtco는 Nunjucks templating 사용 — Liquid filter 문법(`| default: "..."`) 비호환.
+    // GENERATED_AT은 cron.yml step에서 무조건 set이라 default 불필요.
+    s.push_str("생성: {{ env.GENERATED_AT }}\n\n");
 
     let _ = writeln!(
         s,
