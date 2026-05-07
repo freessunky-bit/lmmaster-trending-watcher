@@ -48,8 +48,17 @@ jobs:
           DRY_RUN: ${{ github.event.inputs.dry_run || 'false' }}
         run: cargo run --release --bin trending-watcher
 
-      # 21'.d에서 합류 — JasonEtco/create-an-issue로 report.md 기반 Issue 생성.
-      # - name: Create review issue
-      #   if: env.DRY_RUN != 'true'
-      #   uses: JasonEtco/create-an-issue@v2
-      #   ...
+      - name: Set GENERATED_AT env
+        if: ${{ github.event.inputs.dry_run != 'true' }}
+        run: echo "GENERATED_AT=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> $GITHUB_ENV
+
+      - name: Create review issue (큐레이터 알림)
+        if: ${{ github.event.inputs.dry_run != 'true' }}
+        uses: JasonEtco/create-an-issue@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GENERATED_AT: ${{ env.GENERATED_AT }}
+        with:
+          filename: report.md
+          update_existing: true
+          search_existing: open
