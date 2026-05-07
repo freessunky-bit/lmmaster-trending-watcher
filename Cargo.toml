@@ -1,0 +1,31 @@
+[workspace]
+resolver = "2"
+members = ["crates/trending-watcher-bin"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.78"
+license = "MIT"
+repository = "https://github.com/freessunky-bit/lmmaster-trending-watcher"
+description = "Auto-discovery watcher for LMmaster catalog (deterministic filter + human review queue)"
+
+[workspace.dependencies]
+tokio = { version = "1", features = ["full"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+anyhow = "1"
+thiserror = "1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+parquet = { version = "53", default-features = false, features = ["async", "arrow"] }
+arrow-array = "53"
+arrow-schema = "53"
+regex = "1"
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+strip = "symbols"

@@ -1,0 +1,55 @@
+name: trending-watcher cron
+
+# 6시간마다 실행 — ADR-0059 §1.
+# manual dispatch (workflow_dispatch)로 dry-run 가능.
+
+on:
+  schedule:
+    - cron: "0 */6 * * *"
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "true이면 fetch만 + Issue 생성 X"
+        required: false
+        default: "false"
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  watch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: cargo fmt --check
+        run: cargo fmt --all -- --check
+
+      - name: cargo clippy
+        run: cargo clippy --all-targets -- -D warnings
+
+      - name: cargo test
+        run: cargo test --workspace
+
+      - name: Run trending-watcher
+        env:
+          DRY_RUN: ${{ github.event.inputs.dry_run || 'false' }}
+        run: cargo run --release --bin trending-watcher
+
+      # 21'.d에서 합류 — JasonEtco/create-an-issue로 report.md 기반 Issue 생성.
+      # - name: Create review issue
+      #   if: env.DRY_RUN != 'true'
+      #   uses: JasonEtco/create-an-issue@v2
+      #   ...
