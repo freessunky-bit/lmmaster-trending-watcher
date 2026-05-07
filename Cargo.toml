@@ -24,6 +24,9 @@ arrow-array = "53"
 arrow-schema = "53"
 regex = "1"
 
+# dev — HTTP mocking.
+wiremock = "0.6"
+
 [profile.release]
 opt-level = 3
 lto = "thin"
